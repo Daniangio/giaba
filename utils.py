@@ -1,0 +1,60 @@
+import numpy as np
+
+def split_reminder(x: np.ndarray, chunk_size: int, axis=0):
+    indices = np.arange(chunk_size, x.shape[axis], chunk_size)
+    return np.array_split(x, indices, axis)
+
+def move_elements(arr, consecutive_idcs: np.ndarray, new_place_id: int):
+    assert np.all(consecutive_idcs[1:] - consecutive_idcs[:-1] == 1)
+    move_left = new_place_id < consecutive_idcs[0]
+    
+    tomove = np.array(arr[consecutive_idcs])
+    if move_left:
+        tobemoved = np.array(arr[new_place_id:consecutive_idcs[0]])
+        arr[new_place_id:new_place_id+len(consecutive_idcs)] = tomove
+        arr[new_place_id+len(consecutive_idcs):consecutive_idcs[-1] + 1] = tobemoved
+    else:
+        tobemoved = np.array(arr[consecutive_idcs[-1] + 1:new_place_id])
+        arr[new_place_id-len(consecutive_idcs):new_place_id] = tomove
+        arr[consecutive_idcs[0]:new_place_id-len(consecutive_idcs)] = tobemoved
+
+    return arr
+
+def move_and_permute_elements(arr, seq_src, seq_trg):
+    if seq_src[0] < seq_trg[0]:
+        arr = move_elements(arr, seq_src, seq_trg[0])
+        id_src = seq_trg[0] - len(seq_src)
+        id_trg = seq_trg[0]
+        swap_arr = np.copy(arr)
+        swap_arr[id_src], swap_arr[id_trg] = arr[id_trg], arr[id_src]
+    else:
+        arr = move_elements(arr, seq_src, seq_trg[-1] + 1)
+        id_src = seq_trg[0] + len(seq_trg)
+        id_trg = seq_trg[0]
+        swap_arr = np.copy(arr)
+        swap_arr[id_src], swap_arr[id_trg] = arr[id_trg], arr[id_src]
+    return [arr, swap_arr]
+
+def move_consecutive_types(arr, type):
+    all_arr = []
+    type_indices = np.where(arr[:, 0] == type)[0]
+    consecutive_sequences = np.split(type_indices, np.where(np.diff(type_indices) != 1)[0] + 1)
+    if len(consecutive_sequences) > 1:
+        for sequence_prev, sequence_next in zip(consecutive_sequences[:-1], consecutive_sequences[1:]):
+            all_arr.extend(move_and_permute_elements(np.copy(arr), sequence_prev, sequence_next))
+            all_arr.extend(move_and_permute_elements(np.copy(arr), sequence_next, sequence_prev))
+
+    return all_arr
+
+def first_n_occurrences(arr, n):
+    unique_vals, counts = np.unique(arr, return_counts=True)
+    result = []
+    for val, count in zip(unique_vals, counts):
+        indices = np.where(arr == val)[0]
+        result.extend(indices[:min(n, count)])
+    return result
+
+def swap_combs(seq_src, seq_trg):
+    for i in range(len(seq_trg)):
+        for j in range(len(seq_src)):
+            yield seq_src[:j+1], seq_trg[:i+1]
