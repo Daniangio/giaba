@@ -31,6 +31,16 @@ class Task:
 
 class Result:
 
+    @staticmethod
+    def join(results):
+        return Result(
+            None,
+            np.concatenate([r.options for r in results], axis=0),
+            np.concatenate([r.penalty for r in results], axis=0),
+            np.concatenate([r.task_length for r in results], axis=0),
+            np.concatenate([r.M for r in results], axis=0),
+        )
+
     def __init__(
         self,
         best_options_indices,
@@ -222,59 +232,49 @@ class TaskManager:
             print("Solving and refining chunks...")
             for chunk_df in tqdm.tqdm(chunk_dfs):
                 chunk = chunk_df.values
-                chunk_len = len(chunk)
+                num_chunk_tasks = chunk.shape[-2]
+                
+                perm_indices = np.stack(list(permutations(np.arange(num_chunk_tasks))), axis=0)
+                batch_options = chunk[perm_indices][np.newaxis, ...]
+
                 is_improving = True
+                local_results = [] # local suboptimal could be optimal globally
                 while is_improving:
-                    result = self.solve_chunk(chunk, solution)
+                    result = self.solve_chunk(batch_options, solution)
                     refined_result = self.refine_penalty(result, start_index=start_index)
                     refined_result = self.refine_task_types(refined_result)
+                    local_results.append(refined_result)
                     solution = refined_result.options
                     if len(solution.shape) == 2:
                         solution = solution[np.newaxis, ...]
-                    is_improving = False
-                    # if refined_result == result:
-                    #     is_improving = False
-                    # else:
-                    #     chunk = solution[:, -chunk_len:]
-                    #     solution = solution[:, :-chunk_len]
-                    
-
+                    if refined_result == result:
+                        is_improving = False
+                    else:
+                        chunk = np.copy(solution[:, -num_chunk_tasks:])[:, perm_indices]
+                        solution = np.copy(solution[:, :-num_chunk_tasks])
+                result = Result.join(local_results)
+                solution = result.options
                 start_index += len(chunk)
 
             print("Optimizing consecutive task types...")
-            result = self.refine_task_types(result)
+            result = self.refine_penalty(result, start_index=start_index)
+            # result = self.refine_task_types(result)
             results.append(result)
         
         return results
     
-    def solve_chunk(self, chunk: np.ndarray, solution: np.ndarray) -> Result:
-        if len(chunk.shape) == 2:
-            num_tasks = chunk.shape[0]
-            new_chunk = True
-        else:
-            assert solution is not None
-            num_tasks = chunk.shape[1]
-            new_chunk = False
-        perm_indices = np.stack(list(permutations(np.arange(num_tasks))), axis=0)
-        
-        if new_chunk:
-            options = chunk[perm_indices]
-        else:
-            options = chunk[:, perm_indices]
+    def solve_chunk(self, batch_options: np.ndarray, solution: np.ndarray) -> Result:
         if solution is not None:
             combinations = []
-            if new_chunk:
+            for options in batch_options:
                 for sol_row in solution:
                     combinations.append(
                         np.concatenate((np.repeat(sol_row[np.newaxis, ...], len(options), axis=0), options), axis=-2)
                     )
-            else:
-                for opt_row, sol_row in zip(options, solution):
-                    combinations.append(
-                        np.concatenate((np.repeat(sol_row[np.newaxis, ...], len(opt_row), axis=0), opt_row), axis=-2)
-                    )
             options = np.concatenate(combinations, axis=0)
-        return self.evaluate(options)
+        else:
+            options = np.concatenate(batch_options, axis=0)
+        return self.pick_best(options)
 
     def refine_penalty(self, result: Result, start_index: int):
         if start_index == 0:
@@ -292,7 +292,7 @@ class TaskManager:
                     for seq_src, seq_trg in swap_combs(first_sequence, prev_penalty_indices):
                         options.append(move_and_permute_elements(np.copy(arr), seq_src, seq_trg)[0])
         options = np.stack(options, axis=0)
-        return self.evaluate(options)
+        return self.pick_best(options)
 
     def refine_task_types(self, result: Result):
         best_options = result.options
@@ -306,34 +306,26 @@ class TaskManager:
                     combinations.append(np.stack(new_combination, axis=0))
         if len(combinations) > 0:
             options = np.concatenate((best_options, np.concatenate(combinations, axis=0)), axis=0)
-            new_result = self.evaluate(options)
+            new_result = self.pick_best(options)
             if new_result == result:
                 return new_result                
             return self.refine_task_types(new_result)
-        return self.evaluate(best_options)
+        return self.pick_best(best_options)
     
-    def evaluate(self, options: np.ndarray):
-        _options = np.copy(options)
-        task_type = _options[..., 0]
-        oh_mask = np.zeros_like(task_type, dtype=bool)
-        oh_mask[:, 1:] = task_type[:, :-1] != task_type[:, 1:]
-        oh_mask[:, 0] = True
-        task_oh = _options[..., 3]
+    def pick_best(self, options: np.ndarray):
+        penalty, task_length, M, penalty_score, length_score = self.evaluate(options)
 
-        task_length = _options[..., 1]
-        task_length[oh_mask] += task_oh[oh_mask]
-
-        M = np.cumsum(task_length, axis=-1)
-        M_zeros = np.zeros_like(M)
-        deadline = _options[..., 2]
-        task_penalty = _options[..., 4]
-        penalty = np.maximum(M_zeros, M - deadline) * task_penalty
-        penalty_score = np.sum(penalty, axis=-1)
-        length_score = np.sum(task_length, axis=-1)
         sort_indices = np.lexsort((length_score, penalty_score))
         sorted_penalty_score = penalty_score[sort_indices]
         sorted_length_score = length_score[sort_indices]
-        min_penalty_indices = np.where(sorted_penalty_score == np.min(penalty_score))[0]
+
+        task_type =    options[..., 0]
+        task_length =  options[..., 1]
+        deadline =     options[..., 2]
+        task_oh =      options[..., 3]
+        task_penalty = options[..., 4]
+
+        min_penalty_indices = np.where(sorted_penalty_score == np.min(sorted_penalty_score))[0]
         min_length_indices = np.where(sorted_length_score[min_penalty_indices] == np.min(sorted_length_score[min_penalty_indices]))[0]
 
         passed_indices = sort_indices[min_length_indices]
@@ -347,15 +339,76 @@ class TaskManager:
         passed_penalty_score = np.sum(-task_penalty[passed_indices] * weight_matrix, axis=-1)
         passed_oh_score = np.sum(-task_oh[passed_indices] * weight_matrix, axis=-1)
         ordered_passed_indices = passed_indices[np.lexsort((passed_oh_score, passed_penalty_score, passed_deadline_score))]
-        
+    
         first_occurrence_indices = first_n_occurrences(task_type[ordered_passed_indices][:, -1], 2)
-
         best_options_indices = passed_indices[first_occurrence_indices]
-
         return Result(
-            best_options_indices,
-            options,
-            penalty,
-            task_length,
-            M,
-        )
+                best_options_indices,
+                options,
+                penalty,
+                task_length,
+                M,
+            )
+
+    def evaluate(self, options: np.ndarray):
+        _options = np.copy(options)
+        task_type =    _options[..., 0]
+        task_length =  _options[..., 1]
+        deadline =     _options[..., 2]
+        task_oh =      _options[..., 3]
+        task_penalty = _options[..., 4]
+        oh_mask = np.zeros_like(task_type, dtype=bool)
+        oh_mask[:, 1:] = task_type[:, :-1] != task_type[:, 1:]
+        oh_mask[:, 0] = True
+        
+        task_length[oh_mask] += task_oh[oh_mask]
+
+        M = np.cumsum(task_length, axis=-1)
+        M_zeros = np.zeros_like(M)
+        
+        penalty = np.maximum(M_zeros, M - deadline) * task_penalty
+        penalty_score = np.sum(penalty, axis=-1)
+        length_score = np.sum(task_length, axis=-1)
+        
+        return penalty, task_length, M, penalty_score, length_score
+
+
+#   	  local_results = []
+#         first_n = 1
+#         for best_n in range(1, first_n + 1):
+#             if len(np.unique(penalty_score)) > best_n:
+#                 n_min_penlties = np.partition(np.unique(penalty_score), best_n)[best_n - 1]
+#             else:
+#                 n_min_penlties = np.unique(penalty_score)[min(len(np.unique(penalty_score)) - 1, best_n - 1)]
+#             min_penalty_indices = np.where(sorted_penalty_score == n_min_penlties)[0]
+#             if len(np.unique(sorted_length_score[min_penalty_indices])) > first_n:
+#                 n_min_length = np.partition(np.unique(sorted_length_score[min_penalty_indices]), first_n)[:first_n]
+#             else:
+#                 n_min_length = np.unique(sorted_length_score[min_penalty_indices])
+#             min_length_indices = np.where(np.isin(sorted_length_score[min_penalty_indices], n_min_length))[0]
+
+#             passed_indices = sort_indices[min_length_indices]
+
+#             # When 3 or more tasks of the same type are in a row, order them according to > deadline, < penalty, < oh.
+#             passed_deadline_score = deadline[passed_indices]
+#             weight_matrix = np.ones_like(passed_deadline_score, dtype=np.float32)
+#             weight_col = (np.power(.5, np.arange(0, weight_matrix.shape[1])).astype(np.float32))
+#             weight_matrix *= weight_col[np.newaxis, :]
+#             passed_deadline_score = np.sum(passed_deadline_score * weight_matrix, axis=-1)
+#             passed_penalty_score = np.sum(-task_penalty[passed_indices] * weight_matrix, axis=-1)
+#             passed_oh_score = np.sum(-task_oh[passed_indices] * weight_matrix, axis=-1)
+#             ordered_passed_indices = passed_indices[np.lexsort((passed_oh_score, passed_penalty_score, passed_deadline_score))]
+        
+#             first_occurrence_indices = first_n_occurrences(task_type[ordered_passed_indices][:, -1], first_n)
+#             best_options_indices = passed_indices[first_occurrence_indices]
+#             local_results.append(
+#                 Result(
+#                     best_options_indices,
+#                     options,
+#                     penalty,
+#                     task_length,
+#                     M,
+#                 )
+#             )
+
+#         return Result.join(local_results)
