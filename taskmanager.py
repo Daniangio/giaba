@@ -247,11 +247,7 @@ class TaskManager:
                     solution = refined_result.options
                     if len(solution.shape) == 2:
                         solution = solution[np.newaxis, ...]
-                    if refined_result == result:
-                        is_improving = False
-                    else:
-                        chunk = np.copy(solution[:, -num_chunk_tasks:])[:, perm_indices]
-                        solution = np.copy(solution[:, :-num_chunk_tasks])
+                    is_improving = False
                 result = Result.join(local_results)
                 solution = result.options
                 start_index += len(chunk)
