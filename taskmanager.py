@@ -336,7 +336,7 @@ class TaskManager:
                     combinations.append(np.stack(new_combination, axis=0))
         if len(combinations) > 0:
             options = np.concatenate((best_options, np.concatenate(combinations, axis=0)), axis=0)
-            # options = np.unique(options, axis=0) # drop duplicates
+            # options= np.unique(options, axis=0) # drop duplicates
             new_result = self.pick_best(options)
             if new_result == result:
                 return new_result                
@@ -344,17 +344,18 @@ class TaskManager:
         return self.pick_best(best_options)
     
     def pick_best(self, options: np.ndarray):
-        penalty, task_length, M, penalty_score, length_score = self.evaluate(options)
+        penalty, length = self.evaluate(options)
+        penalty_score = np.sum(penalty, axis=-1)
+        length_score = np.sum(length, axis=-1)
 
         sort_indices = np.lexsort((length_score, penalty_score))
         sorted_penalty_score = penalty_score[sort_indices]
-        sorted_length_score = length_score[sort_indices]
+        sorted_length_score  = length_score[sort_indices]
 
-        task_type =    options[..., 0]
-        task_length =  options[..., 1]
-        deadline =     options[..., 2]
-        task_oh =      options[..., 3]
-        task_penalty = options[..., 4]
+        task_type     = options[..., 0]
+        task_deadline = options[..., 2]
+        task_oh       = options[..., 3]
+        task_penalty  = options[..., 4]
 
         min_penalty_indices = np.where(sorted_penalty_score == np.min(sorted_penalty_score))[0]
         min_length_indices = np.where(sorted_length_score[min_penalty_indices] == np.min(sorted_length_score[min_penalty_indices]))[0]
@@ -362,7 +363,7 @@ class TaskManager:
         passed_indices = sort_indices[min_length_indices]
 
         # When 3 or more tasks of the same type are in a row, order them according to > deadline, < penalty, < oh.
-        passed_deadline_score = deadline[passed_indices]
+        passed_deadline_score = task_deadline[passed_indices]
         weight_matrix = np.ones_like(passed_deadline_score, dtype=np.float32)
         weight_col = (np.power(.5, np.arange(0, weight_matrix.shape[1])).astype(np.float32))
         weight_matrix *= weight_col[np.newaxis, :]
@@ -374,33 +375,31 @@ class TaskManager:
         first_occurrence_indices = first_n_occurrences(task_type[ordered_passed_indices][:, -1], 2)
         best_options_indices = passed_indices[first_occurrence_indices]
         return Result(
-                best_options_indices,
-                options,
-                penalty,
-                task_length,
-            )
+            best_options_indices,
+            options,
+            penalty,
+            length,
+        )
 
     def evaluate(self, options: np.ndarray):
         _options = np.copy(options)
-        task_type =    _options[..., 0]
-        task_length =  _options[..., 1]
-        deadline =     _options[..., 2]
-        task_oh =      _options[..., 3]
-        task_penalty = _options[..., 4]
+        task_type     = _options[..., 0]
+        task_length   = _options[..., 1]
+        task_deadline = _options[..., 2]
+        task_oh       = _options[..., 3]
+        task_penalty  = _options[..., 4]
         oh_mask = np.zeros_like(task_type, dtype=bool)
         oh_mask[:, 1:] = task_type[:, :-1] != task_type[:, 1:]
         oh_mask[:, 0] = True
         
-        task_length[oh_mask] += task_oh[oh_mask]
+        length = np.copy(task_length)
+        length[oh_mask] += task_oh[oh_mask]
 
-        M = np.cumsum(task_length, axis=-1)
+        M = np.cumsum(length, axis=-1)
         M_zeros = np.zeros_like(M)
+        penalty = np.maximum(M_zeros, M - task_deadline) * task_penalty
         
-        penalty = np.maximum(M_zeros, M - deadline) * task_penalty
-        penalty_score = np.sum(penalty, axis=-1)
-        length_score = np.sum(task_length, axis=-1)
-        
-        return penalty, task_length, M, penalty_score, length_score
+        return penalty, length
 
 
 #   	  local_results = []
