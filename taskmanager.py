@@ -37,8 +37,7 @@ class Result:
             None,
             np.concatenate([r.options for r in results], axis=0),
             np.concatenate([r.penalty for r in results], axis=0),
-            np.concatenate([r.task_length for r in results], axis=0),
-            np.concatenate([r.M for r in results], axis=0),
+            np.concatenate([r.length  for r in results], axis=0),
         )
 
     def __init__(
@@ -46,24 +45,42 @@ class Result:
         best_options_indices,
         options,
         penalty,
-        task_length,
-        M,
+        length,
     ) -> None:
         if best_options_indices is None:
             best_options_indices = np.arange(len(options))
         self.len = len(best_options_indices)
         self.options = options[best_options_indices]
         self.penalty = penalty[best_options_indices]
-        self.task_length = task_length[best_options_indices]
-        self.M = M[best_options_indices]
+        self.length  = length[best_options_indices]
+    
+    @property
+    def type(self):
+        return self.options[..., 0]
+
+    @property
+    def deadline(self):
+        return self.options[..., 2]
     
     @property
     def cumlength(self):
-        return np.sum(self.task_length, axis=-1)
+        return np.cumsum(self.length, axis=-1)
+    
+    @property
+    def sumlength(self):
+        return np.sum(self.length, axis=-1)
     
     @property
     def cumpenalty(self):
+        return np.cumsum(self.penalty, axis=-1)
+    
+    @property
+    def sumpenalty(self):
         return np.sum(self.penalty, axis=-1)
+    
+    @property
+    def task_types(self):
+        return self.options[..., 0]
     
     @property
     def task_indices(self):
@@ -98,8 +115,8 @@ class Results:
 
         best_sorted_solution_index = np.lexsort(
             (
-                [r.cumlength[0] for r in results],
-                [r.cumpenalty[0] for r in results],
+                [r.sumlength[0]  for r in results],
+                [r.sumpenalty[0] for r in results],
             )
         )[0]
 
@@ -107,7 +124,19 @@ class Results:
     
     def __len__(self):
         return len(self.best_result)
+    
+    @property
+    def length(self):
+        return self.best_result.length
 
+    @property
+    def cumlength(self):
+        return self.best_result.cumlength
+    
+    @property
+    def sumlength(self):
+        return self.best_result.sumlength
+    
     @property
     def penalty(self):
         return self.best_result.penalty
@@ -117,12 +146,12 @@ class Results:
         return self.best_result.cumpenalty
     
     @property
-    def task_length(self):
-        return self.best_result.task_length
-
+    def sumpenalty(self):
+        return self.best_result.sumpenalty
+    
     @property
-    def cumlength(self):
-        return self.best_result.cumlength
+    def task_types(self):
+        return self.best_result.task_types
     
     @property
     def task_indices(self):
@@ -302,6 +331,7 @@ class TaskManager:
                     combinations.append(np.stack(new_combination, axis=0))
         if len(combinations) > 0:
             options = np.concatenate((best_options, np.concatenate(combinations, axis=0)), axis=0)
+            # options = np.unique(options, axis=0) # drop duplicates
             new_result = self.pick_best(options)
             if new_result == result:
                 return new_result                
@@ -343,7 +373,6 @@ class TaskManager:
                 options,
                 penalty,
                 task_length,
-                M,
             )
 
     def evaluate(self, options: np.ndarray):
@@ -403,7 +432,6 @@ class TaskManager:
 #                     options,
 #                     penalty,
 #                     task_length,
-#                     M,
 #                 )
 #             )
 
