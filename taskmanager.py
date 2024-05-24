@@ -255,7 +255,7 @@ class TaskManager:
         results = Results()
         print("Iterating initial heuristics...")
         for heuristic in tqdm.tqdm(self.heuristics):
-            solution = None
+            batch_solutions = None
             start_index = 0
             chunk_dfs = split_reminder(heuristic, chunk_size)
             print("Solving and refining chunks...")
@@ -264,37 +264,42 @@ class TaskManager:
                 num_chunk_tasks = chunk.shape[-2]
                 
                 perm_indices = np.stack(list(permutations(np.arange(num_chunk_tasks))), axis=0)
-                batch_options = chunk[perm_indices][np.newaxis, ...]
+                batch_options = np.expand_dims(chunk[perm_indices], axis=0)
 
                 is_improving = True
                 local_results = [] # local suboptimal could be optimal globally
                 while is_improving:
-                    result = self.solve_chunk(batch_options, solution)
+                    # batch_options:   (batch_size, num_perms, chunk_size, options)
+                    # batch_solutions: (batch_size, num_solutions, solution_size, options)
+                    result = self.solve_chunk(batch_options, batch_solutions)
                     refined_result = self.refine_penalty(result, start_index=start_index)
                     refined_result = self.refine_task_types(refined_result)
                     local_results.append(refined_result)
-                    solution = refined_result.options
-                    if len(solution.shape) == 2:
-                        solution = solution[np.newaxis, ...]
                     is_improving = False
+                    # if refined_result == result:
+                    #     is_improving = False
+                    # else:
+                    #     refined_solutions = refined_result.options
+                    #     batch_options = np.copy(refined_solutions[:, -num_chunk_tasks:])[:, perm_indices]
+                    #     batch_solutions = np.expand_dims(np.copy(refined_solutions[:, :-num_chunk_tasks]), axis=1)
                 result = Result.join(local_results)
-                solution = result.options
-                start_index += len(chunk)
+                batch_solutions = result.options
+                while batch_solutions.ndim < 4:
+                    batch_solutions = np.expand_dims(batch_solutions, axis=0)
+                start_index += num_chunk_tasks
 
-            print("Optimizing consecutive task types...")
             result = self.refine_penalty(result, start_index=start_index)
-            # result = self.refine_task_types(result)
             results.append(result)
         
         return results
     
-    def solve_chunk(self, batch_options: np.ndarray, solution: np.ndarray) -> Result:
-        if solution is not None:
+    def solve_chunk(self, batch_options: np.ndarray, batch_solution: np.ndarray) -> Result:
+        if batch_solution is not None:
             combinations = []
-            for options in batch_options:
-                for sol_row in solution:
+            for options, solutions in zip(batch_options, batch_solution):
+                for solution in solutions:
                     combinations.append(
-                        np.concatenate((np.repeat(sol_row[np.newaxis, ...], len(options), axis=0), options), axis=-2)
+                        np.concatenate((np.repeat(solution[np.newaxis, ...], len(options), axis=0), options), axis=-2)
                     )
             options = np.concatenate(combinations, axis=0)
         else:
