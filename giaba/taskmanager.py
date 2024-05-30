@@ -1,10 +1,10 @@
+import tqdm
 import numpy as np
 import pandas as pd
 import random
-import tqdm
 from typing import List
 from itertools import permutations
-from utils import *
+from giaba.utils import *
 
 import warnings 
 warnings.filterwarnings('ignore')
@@ -234,7 +234,7 @@ class TaskManager:
         deadline_heuristic = self.task_board.sort_values(by=['deadline', 'type']).reset_index(drop=True)
         difference_heuristic = self.task_board.assign(
                 difference=lambda df: df['deadline'] - df['length']
-            ).sort_values(by=['difference', 'type']).reset_index(drop=True)
+            ).sort_values(by=['difference', 'deadline', 'type']).reset_index(drop=True)
         
         self.heuristics = [
             deadline_heuristic,
@@ -272,23 +272,22 @@ class TaskManager:
                     # batch_options:   (batch_size, num_perms, chunk_size, options)
                     # batch_solutions: (batch_size, num_solutions, solution_size, options)
                     result = self.solve_chunk(batch_options, batch_solutions)
-                    refined_result = self.refine_penalty(result, start_index=start_index)
+                    refined_result = self.refine_task_types(result)
+                    refined_result = self.refine_penalty(refined_result, start_index=start_index)
                     refined_result = self.refine_task_types(refined_result)
                     local_results.append(refined_result)
-                    is_improving = False
-                    # if refined_result == result:
-                    #     is_improving = False
-                    # else:
-                    #     refined_solutions = refined_result.options
-                    #     batch_options = np.copy(refined_solutions[:, -num_chunk_tasks:])[:, perm_indices]
-                    #     batch_solutions = np.expand_dims(np.copy(refined_solutions[:, :-num_chunk_tasks]), axis=1)
+                    # is_improving = False
+                    if refined_result == result:
+                        is_improving = False
+                    else:
+                        refined_solutions = refined_result.options
+                        batch_options = np.copy(refined_solutions[:, -num_chunk_tasks:])[:, perm_indices]
+                        batch_solutions = np.expand_dims(np.copy(refined_solutions[:, :-num_chunk_tasks]), axis=1)
                 result = Result.join(local_results)
                 batch_solutions = result.options
                 while batch_solutions.ndim < 4:
                     batch_solutions = np.expand_dims(batch_solutions, axis=0)
                 start_index += num_chunk_tasks
-
-            result = self.refine_penalty(result, start_index=start_index)
             results.append(result)
         
         return results
@@ -308,40 +307,42 @@ class TaskManager:
 
     def refine_penalty(self, result: Result, start_index: int):
         if start_index == 0:
-            return result
-        options = [opt for opt in result.options]
-        for row_idx in range(len(result)):
-            penalty_indices = np.where(result.penalty[row_idx, start_index:] > 0)[0]
-            first_sequence = np.split(penalty_indices, np.where(np.diff(penalty_indices) != 1)[0] + 1)[0]
-            if len(first_sequence) > 0:
-                first_sequence = np.arange(start_index, start_index + first_sequence[-1] + 1)
-                prev_penalty_indices = np.where(result.penalty[row_idx, :start_index] == 0)[-1] - 1
-                prev_penalty_indices = prev_penalty_indices[prev_penalty_indices > 0]
-                if len(prev_penalty_indices) > 0 and prev_penalty_indices[-1] == start_index - 2:
-                    arr = result.options[row_idx]
-                    for seq_src, seq_trg in swap_combs(first_sequence, prev_penalty_indices):
-                        options.append(move_and_permute_elements(np.copy(arr), seq_src, seq_trg)[0])
-        options = np.stack(options, axis=0)
-        return self.pick_best(options)
-
-    def refine_task_types(self, result: Result):
-        best_options = result.options
-        u_types = np.unique(best_options[..., 0])
+            return result        
 
         combinations = []
-        for row in best_options:
+        for option, penalty in zip(result.options, result.penalty):
+            first_penalty_index = np.where(penalty[start_index:] > 0)[0]
+            if len(first_penalty_index) > 0:
+                first_penalty_index = first_penalty_index[0]
+                chunk_idcs = np.arange(start_index, start_index + first_penalty_index + 1)
+                for shift in range(1, start_index):
+                    combinations.append(shift_chunk(option, chunk_idcs, -shift))
+        if len(combinations) > 0:
+            options = np.concatenate([result.options, np.stack(combinations, axis=0)], axis=0)
+            new_result = self.pick_best(options)
+            if new_result == result:
+                return new_result 
+            return self.refine_penalty(new_result, start_index)
+        return result
+
+    def refine_task_types(self, result: Result):
+        options = result.options
+        u_types = np.unique(result.task_types)
+
+        combinations = []
+        for option in options:
             for type in u_types:
-                new_combination = move_consecutive_types(row, type)
+                new_combination = stack_consecutive_types(option, type)
                 if len(new_combination) > 0:
                     combinations.append(np.stack(new_combination, axis=0))
         if len(combinations) > 0:
-            options = np.concatenate((best_options, np.concatenate(combinations, axis=0)), axis=0)
-            # options= np.unique(options, axis=0) # drop duplicates
+            options = np.concatenate((options, np.concatenate(combinations, axis=0)), axis=0)
+            options = np.unique(options, axis=0) # drop duplicates
             new_result = self.pick_best(options)
             if new_result == result:
                 return new_result                
             return self.refine_task_types(new_result)
-        return self.pick_best(best_options)
+        return result
     
     def pick_best(self, options: np.ndarray):
         penalty, length = self.evaluate(options)
@@ -372,7 +373,7 @@ class TaskManager:
         passed_oh_score = np.sum(-task_oh[passed_indices] * weight_matrix, axis=-1)
         ordered_passed_indices = passed_indices[np.lexsort((passed_oh_score, passed_penalty_score, passed_deadline_score))]
     
-        first_occurrence_indices = first_n_occurrences(task_type[ordered_passed_indices][:, -1], 2)
+        first_occurrence_indices = first_n_occurrences(task_type[ordered_passed_indices][:, -1], 5)
         best_options_indices = passed_indices[first_occurrence_indices]
         return Result(
             best_options_indices,

@@ -20,29 +20,30 @@ def move_elements(arr, consecutive_idcs: np.ndarray, new_place_id: int):
 
     return arr
 
-def move_and_permute_elements(arr, seq_src, seq_trg):
+def stack_and_permute_elements(arr, seq_src, seq_trg):
+    stacked_arr = np.copy(arr)
     if seq_src[0] < seq_trg[0]:
-        arr = move_elements(arr, seq_src, seq_trg[0])
+        stacked_arr = move_elements(stacked_arr, seq_src, seq_trg[0])
         id_src = seq_trg[0] - len(seq_src)
         id_trg = seq_trg[0]
-        swap_arr = np.copy(arr)
-        swap_arr[id_src], swap_arr[id_trg] = arr[id_trg], arr[id_src]
+        swap_arr = np.copy(stacked_arr)
+        swap_arr[id_src], swap_arr[id_trg] = stacked_arr[id_trg], stacked_arr[id_src]
     else:
-        arr = move_elements(arr, seq_src, seq_trg[-1] + 1)
+        stacked_arr = move_elements(stacked_arr, seq_src, seq_trg[-1] + 1)
         id_src = seq_trg[0] + len(seq_trg)
         id_trg = seq_trg[0]
-        swap_arr = np.copy(arr)
-        swap_arr[id_src], swap_arr[id_trg] = arr[id_trg], arr[id_src]
-    return [arr, swap_arr]
+        swap_arr = np.copy(stacked_arr)
+        swap_arr[id_src], swap_arr[id_trg] = stacked_arr[id_trg], stacked_arr[id_src]
+    return [stacked_arr, swap_arr]
 
-def move_consecutive_types(arr, type):
+def stack_consecutive_types(arr, type):
     all_arr = []
     type_indices = np.where(arr[:, 0] == type)[0]
     consecutive_sequences = np.split(type_indices, np.where(np.diff(type_indices) != 1)[0] + 1)
     if len(consecutive_sequences) > 1:
         for sequence_prev, sequence_next in zip(consecutive_sequences[:-1], consecutive_sequences[1:]):
-            all_arr.extend(move_and_permute_elements(np.copy(arr), sequence_prev, sequence_next))
-            all_arr.extend(move_and_permute_elements(np.copy(arr), sequence_next, sequence_prev))
+            all_arr.extend(stack_and_permute_elements(arr, sequence_prev, sequence_next))
+            all_arr.extend(stack_and_permute_elements(arr, sequence_next, sequence_prev))
 
     return all_arr
 
@@ -58,3 +59,18 @@ def swap_combs(seq_src, seq_trg):
     for i in range(len(seq_trg)):
         for j in range(len(seq_src)):
             yield seq_src[:j+1], seq_trg[:i+1]
+
+def shift_chunk(arr: np.ndarray, chunk_idcs: np.ndarray, shift: int):
+    # We spare computation time by not checking if chunk_idcs are consecutive.
+    # We assume they are.
+    shifted_arr = np.copy(arr)
+    if shift < 0:
+        shift = max(-chunk_idcs[0], shift)
+        id_from = chunk_idcs[0] + shift
+        id_to = chunk_idcs[-1] + 1
+    else:
+        shift = min(len(arr) - chunk_idcs[-1] - 1, shift)
+        id_from = chunk_idcs[0]
+        id_to = chunk_idcs[-1] + 1 + shift
+    shifted_arr[id_from:id_to] = np.roll(shifted_arr[id_from:id_to], shift, axis=0)
+    return shifted_arr
