@@ -1,4 +1,5 @@
 import numpy as np
+from numba import jit
 
 def split_reminder(x: np.ndarray, chunk_size: int, axis=0):
     indices = np.arange(chunk_size, x.shape[axis], chunk_size)
@@ -55,6 +56,11 @@ def first_n_occurrences(arr, n):
         result.extend(indices[:min(n, count)])
     return result
 
+def find_nth_smallest(arr, n):
+    if n > len(arr):
+        n = len(arr)
+    return np.partition(arr, n-1)[n-1]
+
 def swap_combs(seq_src, seq_trg):
     for i in range(len(seq_trg)):
         for j in range(len(seq_src)):
@@ -74,3 +80,11 @@ def shift_chunk(arr: np.ndarray, chunk_idcs: np.ndarray, shift: int):
         id_to = chunk_idcs[-1] + 1 + shift
     shifted_arr[id_from:id_to] = np.roll(shifted_arr[id_from:id_to], shift, axis=0)
     return shifted_arr
+
+@jit(nopython=True)
+def find_first(item: bool, vec: np.ndarray[bool]):
+    """return the index of the first occurence of item in vec"""
+    for i, value in enumerate(vec):
+        if item == value:
+            return i
+    return -1
