@@ -107,7 +107,10 @@ class Result:
         not_assigned_mask = equivalence_index == -1
         while np.sum(not_assigned_mask) > 0:
             idx = find_first(True, not_assigned_mask)
-            requirment_1 = np.argwhere(np.all(sorted_task_indices == sorted_task_indices[idx], axis=1)).flatten()
+            try:
+                requirment_1 = np.argwhere(np.all(sorted_task_indices == sorted_task_indices[idx], axis=1)).flatten()
+            except:
+                pass
             requirment_2 = np.argwhere(self.sumpenalty == self.sumpenalty[idx]).flatten()
             requirment_3 = np.argwhere(self.sumlength  == self.sumlength[idx]).flatten()
             requirment_4 = np.argwhere(last_task_type  == last_task_type[idx]).flatten()
@@ -120,7 +123,7 @@ class Result:
     def prune(self, threshold: int = 10):
         sumpenalty = self.sumpenalty
         min_penalty = np.min(sumpenalty)
-        pruning_filter = sumpenalty - min_penalty <= threshold
+        pruning_filter = np.nonzero(sumpenalty - min_penalty <= threshold)[0]
         self._initialize(
             pruning_filter,
             self.options,
